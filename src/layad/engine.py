@@ -1,8 +1,10 @@
 """Model lifecycle and inference, serialised onto one dedicated thread.
 
 Everything that touches the model -- load, predict, unload -- is submitted to a
-single-worker executor. GPU work serialises anyway and MLX is not documented as
-thread safe, so extra workers would buy nothing and risk correctness.
+single-worker executor. GPU work serialises anyway and neither MLX nor upstream laya
+is documented as thread safe, so extra workers would buy nothing and risk correctness.
+
+Which runtime does the work lives in `layad.backends`; this module is runtime-agnostic.
 """
 
 from __future__ import annotations
@@ -13,9 +15,9 @@ import threading
 import time
 import warnings
 from collections import deque
-from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any
+
+from . import backends
 
 MAX_BATCH_STATES = 512
 _LATENCY_WINDOW = 512
@@ -35,63 +37,13 @@ def to_jev(answer: dict) -> dict:
     return out
 
 
-def truncated_questions(agent, state, questions) -> list[str]:
-    """Question ids whose state text did not fit in the context window.
-
-    Laya truncates silently: `build_sequence` slices the state to whatever room is
-    left after the question prefix. Preparing the same questions against an empty
-    state gives the exact prefix length, hence the exact room, so this reports real
-    truncation rather than the `len(ids) >= max_len` heuristic -- which also fires
-    when a state fits with zero tokens to spare.
-    """
-    from laya_mlx.common import serialize_state
-
-    if not questions:
-        return []
-    max_len = agent.cfg.get("max_len", 512)
-    text = serialize_state(state).replace(agent.tok.mask_token, " ")
-    n_state = len(agent.tok(text, add_special_tokens=False)["input_ids"])
-    empty_items, _ = agent.prepare("", questions)
-    out = []
-    for qid, item in zip(questions, empty_items, strict=True):
-        room = max_len - len(item["ids"])  # empty-state ids are prefix + [SEP]
-        if room < 0 or n_state > room:
-            out.append(qid)
-    return out
-
-
-def _default_loader(config):
-    import laya_mlx
-
-    return laya_mlx.load(
-        config.model,
-        dtype=config.dtype,
-        batch_size=config.batch_size,
-        cache_prompts=config.cache_prompts,
-        revision=config.revision,
-    )
-
-
-def _resolved_revision(agent) -> str | None:
-    """The checkpoint commit actually loaded, read back off the snapshot path.
-
-    Provenance matters here: a calibrated threshold is bound to one runtime *and* one
-    checkpoint, so a score is only interpretable alongside what produced it.
-    """
-    path = getattr(agent, "model_dir", None)
-    if path is None:
-        return None
-    return path.name if path.parent.name == "snapshots" else None
-
-
 class Engine:
     """Owns the Agent. Lazy-loads on first use; every model call is queued."""
 
-    def __init__(self, config, loader: Callable[[Any], Any] | None = None):
+    def __init__(self, config, backend=None):
         self.config = config
-        self._loader = loader or _default_loader
+        self.backend = backend or backends.select(config)
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="layad-model")
-        self._agent = None
         self._stats_lock = threading.Lock()
         self._latencies: deque[float] = deque(maxlen=_LATENCY_WINDOW)
         self.load_warnings: list[str] = []
@@ -106,39 +58,31 @@ class Engine:
 
     @property
     def loaded(self) -> bool:
-        return self._agent is not None
+        return self.backend.loaded
 
-    def _load_blocking(self):
-        if self._agent is not None:
-            return self._agent
+    def _load_blocking(self) -> None:
+        if self.backend.loaded:
+            return
         started = time.monotonic()
         with warnings.catch_warnings(record=True) as caught:
             # The typed-decisions checkpoint warns that it ships a choice:11+ temperature
             # of 0.1006 and that confidence from those buckets is uncalibrated. Swallowing
             # it would lose the best available signal that choice.confidence is junk.
             warnings.simplefilter("always")
-            agent = self._loader(self.config)
+            self.backend.load()
         self.load_warnings = [str(w.message) for w in caught]
         # The first forward pass after a load costs ~240 ms against ~20 ms steady state:
         # MLX compiles and allocates on first use. Pay that here, so the first real request
         # of the day does not. Not counted in request stats.
-        agent.system_one("warmup", _WARMUP_QUESTION)
+        self.backend.system_one("warmup", _WARMUP_QUESTION)
         self.load_seconds = time.monotonic() - started
         self.loaded_at = time.time()
-        self._agent = agent
-        return agent
 
     def _unload_blocking(self) -> bool:
-        if self._agent is None:
+        if not self.backend.loaded:
             return False
-        self._agent = None
+        self.backend.unload()
         self.loaded_at = None
-        try:
-            import mlx.core as mx
-
-            mx.clear_cache()
-        except Exception:  # pragma: no cover - MLX absent or API drift
-            pass
         return True
 
     def _submit(self, fn, *args) -> Future:
@@ -172,19 +116,19 @@ class Engine:
     # -- inference ---------------------------------------------------------
 
     def _predict_blocking(self, state, questions) -> dict:
-        agent = self._load_blocking()
+        self._load_blocking()
         started = time.perf_counter()
-        raw = agent.system_one(state, questions)
+        raw = self.backend.system_one(state, questions)
         elapsed_ms = (time.perf_counter() - started) * 1000
-        truncated = truncated_questions(agent, state, questions)
+        truncated = self.backend.truncated(state, questions)
         with self._stats_lock:
             self.requests += 1
             self._latencies.append(elapsed_ms)
             self.last_used = time.time()
         usage = dict(raw.get("usage") or {})
-        usage.update(self.provenance(agent))
+        usage.update(self.provenance())
         return {
-            "model": self.config.model,
+            "model": self.config.resolved_model,
             "answers": {qid: to_jev(a) for qid, a in raw["answers"].items()},
             "usage": usage,
             "truncated": truncated,
@@ -209,20 +153,8 @@ class Engine:
 
     # -- introspection -----------------------------------------------------
 
-    def provenance(self, agent=None) -> dict:
-        agent = agent or self._agent
-        try:
-            import laya_mlx
-
-            laya_version = laya_mlx.__version__
-        except Exception:  # pragma: no cover - import failure surfaces elsewhere
-            laya_version = None
-        return {
-            "runtime": "mlx",
-            "laya_mlx_version": laya_version,
-            "dtype": self.config.dtype,
-            "revision": _resolved_revision(agent) if agent is not None else self.config.revision,
-        }
+    def provenance(self) -> dict:
+        return self.backend.provenance()
 
     def latency_percentiles(self) -> dict:
         with self._stats_lock:
@@ -236,7 +168,8 @@ class Engine:
 
     def health(self) -> dict:
         return {
-            "model": self.config.model,
+            "model": self.config.resolved_model,
+            "backend": self.backend.name,
             "loaded": self.loaded,
             "cold": not self.loaded,
             "uptime_seconds": round(time.monotonic() - self.started_at, 2),

@@ -17,6 +17,9 @@ import sys
 import time
 from pathlib import Path
 
+from .config import daemon_env
+from .service import ServiceError
+
 LABEL = "com.rcwsr.layad"
 # `brew services start layad` writes its own plist under this label. Two launchd jobs
 # both binding 127.0.0.1:8918 means one of them dies on startup, repeatedly, under
@@ -27,7 +30,7 @@ LOG_DIR = Path("~/Library/Logs").expanduser()
 AGENT_DIR = Path("~/Library/LaunchAgents").expanduser()
 
 
-class LaunchAgentError(RuntimeError):
+class LaunchAgentError(ServiceError):
     pass
 
 
@@ -55,12 +58,6 @@ def brew_service_installed() -> bool:
 
 
 def build_plist(label: str = LABEL, *, config_env: dict | None = None) -> dict:
-    env = {"LAYAD_WARM": "1"}
-    # Carry any LAYAD_* settings from the installing shell: launchd inherits nothing
-    # from your terminal, so `LAYAD_PORT=9000 layad install-agent` would otherwise
-    # silently install a daemon on 8918.
-    source = os.environ if config_env is None else config_env
-    env.update({k: v for k, v in source.items() if k.startswith("LAYAD_")})
     return {
         "Label": label,
         # sys.executable resolves the venv layad is installed in, so the agent does not
@@ -68,7 +65,7 @@ def build_plist(label: str = LABEL, *, config_env: dict | None = None) -> dict:
         "ProgramArguments": [sys.executable, "-m", "layad", "serve"],
         "RunAtLoad": True,
         "KeepAlive": True,
-        "EnvironmentVariables": env,
+        "EnvironmentVariables": daemon_env(config_env),
         "StandardOutPath": str(LOG_DIR / "layad.log"),
         "StandardErrorPath": str(LOG_DIR / "layad.err.log"),
         "WorkingDirectory": str(Path.home()),
@@ -146,6 +143,7 @@ def restart(label: str = LABEL) -> None:
 
 def status(label: str = LABEL) -> dict:
     return {
+        "manager": "launchd",
         "label": label,
         "plist": str(plist_path(label)),
         "installed": plist_path(label).is_file(),

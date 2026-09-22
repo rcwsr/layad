@@ -8,6 +8,11 @@ brew tap rcwsr/tap
 brew install layad
 ```
 
+The formula is **macOS on Apple silicon only** (`depends_on arch: :arm64`) and installs the
+MLX backend. On Linux, install from PyPI or git with `uv tool install` — the dependency
+markers pick the torch backend there, and `layad install-agent` writes a systemd user unit
+instead of a LaunchAgent.
+
 ## Why not homebrew-core
 
 homebrew-core builds Python formulae from sdists. The dependency closure here is 34

@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from . import __version__, launchagent
+from . import __version__, service
 from .config import client_endpoint, config_path
 from .config import load as load_config
 
@@ -159,36 +159,38 @@ def run(
 
 @app.command("install-agent")
 def install_agent(
-    force: Annotated[bool, typer.Option(help="Replace an existing plist.")] = False,
+    force: Annotated[bool, typer.Option(help="Replace an existing unit file.")] = False,
     allow_brew_conflict: Annotated[
-        bool, typer.Option(help="Install even if brew services manages layad.")
+        bool, typer.Option(help="macOS: install even if brew services manages layad.")
     ] = False,
 ):
-    """Install and load the LaunchAgent so layad starts (and warms) at login."""
+    """Install and start the daemon: a LaunchAgent on macOS, a systemd user unit on Linux."""
     try:
-        path = launchagent.install(force=force, allow_brew_conflict=allow_brew_conflict)
-    except launchagent.LaunchAgentError as exc:
+        path, warning = service.install(force=force, allow_brew_conflict=allow_brew_conflict)
+    except service.ServiceError as exc:
         _err(str(exc))
     typer.echo(f"installed and loaded {path}")
-    _emit(launchagent.status())
+    if warning:
+        typer.echo(f"warning: {warning}", err=True)
+    _emit(service.status())
 
 
 @app.command("uninstall-agent")
 def uninstall_agent():
-    """Unload and remove the LaunchAgent."""
+    """Stop and remove the service."""
     try:
-        existed = launchagent.uninstall()
-    except launchagent.LaunchAgentError as exc:
+        existed = service.uninstall()
+    except service.ServiceError as exc:
         _err(str(exc))
     typer.echo("removed" if existed else "nothing to remove")
 
 
 @app.command("restart-agent")
 def restart_agent():
-    """Restart the LaunchAgent (launchctl kickstart -k)."""
+    """Restart the service."""
     try:
-        launchagent.restart()
-    except launchagent.LaunchAgentError as exc:
+        service.restart()
+    except service.ServiceError as exc:
         _err(str(exc))
     typer.echo("restarted")
 
@@ -202,10 +204,12 @@ def config():
             "config_file": str(config_path()),
             "config_file_exists": config_path().is_file(),
             "endpoint": client_endpoint(config=resolved),
-            "agent": launchagent.status(),
+            "service": service.status(),
             "layad_version": __version__,
             "python": sys.executable,
             **resolved.as_dict(),
+            "resolved_backend": resolved.resolved_backend,
+            "resolved_model": resolved.resolved_model,
         }
     )
 

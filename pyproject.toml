@@ -4,22 +4,28 @@ build-backend = "hatchling.build"
 
 [project]
 name = "layad"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local daemon that keeps the Laya decision model resident and serves it over HTTP"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Robin Cawser", email = "robin@cwsr.dev" }]
-keywords = ["laya", "mlx", "apple-silicon", "inference", "daemon"]
+keywords = ["laya", "mlx", "pytorch", "apple-silicon", "inference", "daemon"]
 classifiers = [
   "Environment :: MacOS X",
   "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-  # Pinned to the 0.2 line: layad reads laya_mlx.common.serialize_state and
-  # agent.cfg/agent.prepare to detect truncation exactly (see engine.truncated_questions).
-  "laya-mlx>=0.2,<0.3",
+  # The backend is a platform fact, not a user choice, so both runtimes sit in the core
+  # dependencies behind markers rather than in extras: the right one installs itself.
+  # Both are pinned to a minor line because layad reads private-ish internals to detect
+  # truncation exactly -- serialize_state, build_sequence, agent.cfg, agent.prepare.
+  # PEP 508 markers have no `not`, so the torch line is the De Morgan complement of the
+  # MLX one: exactly one of the two ever installs.
+  "laya-mlx>=0.2,<0.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "laya>=0.3,<0.4; sys_platform != 'darwin' or platform_machine != 'arm64'",
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "typer>=0.12",

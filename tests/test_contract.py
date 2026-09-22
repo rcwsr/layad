@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from layad.config import load as load_config
+
 pytestmark = pytest.mark.model
+
+BACKEND = load_config().resolved_backend
 
 QUESTIONS = {
     "is_urgent": {
@@ -37,7 +41,10 @@ def test_envelope_is_jev_shaped(body):
     assert set(QUESTIONS) == set(body["answers"])
     assert body["usage"]["input_tokens"] > 0
     assert body["usage"]["output_tokens"] == 0
-    assert body["usage"]["runtime"] == "mlx"
+    # The runtime is asserted, the score never is. The two backends agree closely but not
+    # exactly (0.0105 worst case over 24 measured answers), so pinning a number here would
+    # pin it to whichever runtime happened to run the suite.
+    assert body["usage"]["runtime"] == BACKEND
     assert body["truncated"] == []
 
 
@@ -74,8 +81,10 @@ def test_action_key_is_never_exposed(body):
 def test_health_reports_a_resident_model(model_client):
     health = model_client.get("/health").json()
     assert health["loaded"] is True
-    assert health["provenance"]["runtime"] == "mlx"
-    assert health["provenance"]["laya_mlx_version"]
+    assert health["backend"] == BACKEND
+    assert health["provenance"]["runtime"] == BACKEND
+    assert health["provenance"]["backend_version"]
+    assert health["provenance"]["device"]
 
 
 def test_warm_calls_are_orders_of_magnitude_faster_than_cold(model_client):

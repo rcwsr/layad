@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 import pytest
+from conftest import FakeBackend
 from fastapi.testclient import TestClient
 
 from layad.config import Config
@@ -16,7 +17,7 @@ QUESTION = {"q": {"type": "noul", "instructions": "Is this urgent?"}}
 
 @pytest.fixture
 def app_and_engine(fake_agent):
-    engine = Engine(Config(), loader=lambda config: fake_agent)
+    engine = Engine(Config(), backend=FakeBackend(fake_agent))
     yield lambda **kw: create_app(Config(), engine=engine, **kw), engine
     engine.shutdown()
 
@@ -47,7 +48,7 @@ def test_run_returns_jev_envelope(app_and_engine):
     with TestClient(make_app(warm=False)) as client:
         body = client.post("/ai/run", json={"state": "disk is full", "questions": QUESTION}).json()
     assert set(body) == {"model", "answers", "usage", "truncated"}
-    assert body["model"] == Config().model
+    assert body["model"] == Config().resolved_model
     assert body["answers"]["q"] == {"type": "noul", "noul": 0.42}
 
 

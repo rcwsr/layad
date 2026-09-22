@@ -6,3 +6,6 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+# requirements.lock is the lockfile of record (the Homebrew formula installs it);
+# a second, uv-only lock would just drift.
+uv.lock

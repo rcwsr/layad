@@ -71,9 +71,60 @@ class FakeAgent:
         }
 
 
+class FakeBackend:
+    """A runtime that loads nothing. The engine is backend-agnostic, so its tests are too."""
+
+    name = "fake"
+
+    def __init__(self, agent=None, on_load=None):
+        self.agent = agent or FakeAgent()
+        self.on_load = on_load
+        self.loads = 0
+        self._loaded = False
+
+    @property
+    def loaded(self) -> bool:
+        return self._loaded
+
+    def load(self) -> None:
+        if self._loaded:
+            return
+        if self.on_load is not None:
+            self.on_load()
+        self.loads += 1
+        self._loaded = True
+
+    def unload(self) -> None:
+        self._loaded = False
+
+    def system_one(self, state, questions):
+        return self.agent.system_one(state, questions)
+
+    def truncated(self, state, questions):
+        from layad.backends import truncated_question_ids
+
+        if not questions:
+            return []
+        items, _ = self.agent.prepare("", questions)
+        return truncated_question_ids(
+            questions,
+            [len(item["ids"]) for item in items],
+            len(str(state).split()),
+            self.agent.cfg["max_len"],
+        )
+
+    def provenance(self) -> dict:
+        return {"runtime": self.name, "dtype": "float16", "revision": None}
+
+
 @pytest.fixture
 def fake_agent():
     return FakeAgent()
+
+
+@pytest.fixture
+def fake_backend(fake_agent):
+    return FakeBackend(fake_agent)
 
 
 @pytest.fixture(scope="session")

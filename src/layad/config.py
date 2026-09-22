@@ -7,7 +7,8 @@ import tomllib
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
-DEFAULT_MODEL = "aac6fef/laya-typed-decisions-mlx"
+from .backends import BACKENDS, DEFAULT_MODELS, default_backend
+
 DEFAULT_PORT = 8918
 DTYPES = ("float16", "float32", "bfloat16")
 
@@ -22,16 +23,22 @@ def config_path() -> Path:
 
 @dataclass(frozen=True)
 class Config:
-    model: str = DEFAULT_MODEL
+    # model and backend default to None/"auto" so one config.toml is portable: the same
+    # file on a Mac loads the MLX checkpoint and on the homelab box loads the torch one.
+    backend: str = "auto"
+    model: str | None = None
     revision: str | None = None
-    dtype: str = "float16"
+    device: str | None = None  # torch backend only: cuda / mps / cpu. None = auto-detect
+    dtype: str = "float16"  # mlx backend only; torch forces float32 off cuda
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
-    batch_size: int = 16
+    batch_size: int = 16  # mlx backend only
     idle_ttl_seconds: int = 0  # 0 = never unload; ~950 MiB resident beats an 11.6 s reload
-    cache_prompts: bool = True
+    cache_prompts: bool = True  # mlx backend only
 
     def __post_init__(self) -> None:
+        if self.backend not in ("auto", *BACKENDS):
+            raise ValueError(f"backend must be one of {['auto', *BACKENDS]}, got {self.backend!r}")
         if self.dtype not in DTYPES:
             raise ValueError(f"dtype must be one of {list(DTYPES)}, got {self.dtype!r}")
         if not 1 <= self.port <= 65535:
@@ -40,6 +47,15 @@ class Config:
             raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
         if self.idle_ttl_seconds < 0:
             raise ValueError(f"idle_ttl_seconds must be >= 0, got {self.idle_ttl_seconds}")
+
+    @property
+    def resolved_backend(self) -> str:
+        return default_backend() if self.backend == "auto" else self.backend
+
+    @property
+    def resolved_model(self) -> str:
+        """The checkpoint to load. The MLX and torch repos hold different files."""
+        return self.model or DEFAULT_MODELS[self.resolved_backend]
 
     @property
     def endpoint(self) -> str:
@@ -98,6 +114,24 @@ def load(path: Path | None = None, env: dict | None = None) -> Config:
     merged.update(_from_file(config_path() if path is None else path))
     merged.update(_from_env(env))
     return Config(**{k: _coerce(k, v) for k, v in merged.items()})
+
+
+def daemon_env(source: dict | None = None) -> dict:
+    """The environment a supervised `layad serve` should inherit.
+
+    Neither launchd nor systemd inherits anything from the shell that installed the
+    service, so `LAYAD_PORT=9000 layad install-agent` would otherwise silently install a
+    daemon on 8918. LAYAD_WARM=1 pays the cold start at boot rather than on first request.
+    """
+    env = {"LAYAD_WARM": "1"}
+    env.update(
+        {
+            k: v
+            for k, v in (os.environ if source is None else source).items()
+            if k.startswith(ENV_PREFIX)
+        }
+    )
+    return env
 
 
 def client_endpoint(env: dict | None = None, config: Config | None = None) -> str:

@@ -110,7 +110,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FloatingPointError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"model": config.model, "results": results}
+        return {"model": config.resolved_model, "results": results}
 
     @app.get("/health")
     async def health():
