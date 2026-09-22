@@ -57,8 +57,9 @@ brew update && brew install rcwsr/tap/layad
 
 Formulae live at the tap root, next to `treesync.rb`.
 
-If the layad repo is private, `brew install` cannot fetch the release tarball without
-credentials — publish the repo, or stay on `uv tool install git+ssh://…`.
+The layad repo is public, so `brew install` can fetch the release tarball anonymously.
+Making it private again would break installs: Homebrew has no way to authenticate to
+the tarball URL.
 
 ## Choose one launchd manager
 

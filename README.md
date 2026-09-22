@@ -46,7 +46,7 @@ passthrough.
 With uv (recommended — it pins its own Python and needs no admin rights):
 
 ```sh
-uv tool install git+ssh://git@github.com/rcwsr/layad
+uv tool install git+https://github.com/rcwsr/layad
 layad install-agent
 layad status
 ```
