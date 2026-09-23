@@ -8,9 +8,9 @@ class Layad < Formula
 
   desc "Local daemon that keeps the Laya decision model resident and serves it over HTTP"
   homepage "https://github.com/rcwsr/layad"
-  url "https://github.com/rcwsr/layad/archive/refs/tags/v0.1.0.tar.gz"
-  # Placeholder: scripts/bump-formula.sh rewrites url and sha256 at release time.
-  sha256 "8a5e81e42cbd7ec936c080dd9ebe4c82bc9289765d2d16f71e4890536055d104"
+  url "https://github.com/rcwsr/layad/archive/refs/tags/v0.2.0.tar.gz"
+  # url and sha256 are rewritten by scripts/bump-formula.sh at release time.
+  sha256 "2c065167e2c79c29af8710fcd2e2c6e86370e5a642df3b3879e1e4105f18601e"
   license "MIT"
 
   # MLX compiles to Metal: there is no Intel build and no Linux build, and mlx wheels
