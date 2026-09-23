@@ -88,13 +88,18 @@ def test_health_reports_a_resident_model(model_client):
 
 
 def test_warm_calls_are_orders_of_magnitude_faster_than_cold(model_client):
-    # Deliberately an order of magnitude, not a figure: absolute latency is machine
-    # dependent, but warm-vs-cold (~20 ms vs ~11,600 ms) is the whole premise. The median
-    # rather than p95 because a single slow sample would otherwise decide the result.
+    # The premise of the whole daemon, asserted as the ratio it actually is rather than a
+    # figure. A hard 200 ms ceiling was really a claim about MLX on an M-series Mac: the
+    # same code measured a p50 of 733 ms on a 2-core CI runner doing torch on CPU, which
+    # is a slow machine, not a broken one. The median rather than p95 because a single
+    # slow sample would otherwise decide the result.
     for _ in range(10):
         model_client.post("/ai/run", json={"state": STATE, "questions": QUESTIONS})
-    p50 = model_client.get("/health").json()["latency_ms"]["p50"]
-    assert p50 is not None and p50 < 200
+    health = model_client.get("/health").json()
+    p50 = health["latency_ms"]["p50"]
+    cold_ms = health["load_seconds"] * 1000
+    assert p50 is not None
+    assert p50 * 10 < cold_ms, f"warm {p50:.1f} ms is not 10x faster than a {cold_ms:.0f} ms load"
 
 
 def test_oversized_state_is_reported_as_truncated(model_client):
