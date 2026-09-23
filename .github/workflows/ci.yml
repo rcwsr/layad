@@ -26,7 +26,17 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pytest -q
       - name: the platform picked the backend it can actually run
-        run: uv run python -c "import layad.backends as b, importlib; importlib.import_module({'mlx': 'laya_mlx', 'torch': 'laya'}[b.default_backend()])"
+        run: |
+          uv run python - <<'PY'
+          import importlib
+
+          from layad.backends import default_backend
+
+          backend = default_backend()
+          runtime = {"mlx": "laya_mlx", "torch": "laya"}[backend]
+          importlib.import_module(runtime)
+          print(f"{backend} backend -> {runtime} imports")
+          PY
 
   model:
     # Private macOS runners bill at 10x, so the ~800 MiB checkpoint download stays off
